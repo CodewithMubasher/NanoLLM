@@ -63,7 +63,7 @@ def install_deps():
     sec("Installing dependencies")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
                           "torch", "tokenizers", "datasets", "numpy", "tqdm"])
-    ok("Dependencies installed")
+    ok("Done")
 
 
 # ============================================================
@@ -78,48 +78,12 @@ def verify_gpu():
         ok(f"{name} ({vram:.1f} GB)")
         return "cuda"
     else:
-        fail("No GPU found - training will be slow on CPU")
+        fail("No GPU - training will be slow")
         return "cpu"
 
 
 # ============================================================
-# Step 3: Train tokenizer
-# ============================================================
-
-def train_tok():
-    sec("Tokenizer")
-    from tokenizer import train_tokenizer as tt
-
-    os.makedirs("data/tokenizer", exist_ok=True)
-    corpus = "data/tokenizer/corpus.txt"
-
-    if not os.path.exists(corpus):
-        texts = [
-            "The quick brown fox jumps over the lazy dog.",
-            "Python is a programming language that lets you work quickly.",
-            "Machine learning is a subset of artificial intelligence.",
-            "The capital of France is Paris.",
-            "Water is composed of hydrogen and oxygen.",
-            "Hello world, how are you doing today?",
-            "I am learning to build language models from scratch.",
-            "This is a test sentence for the tokenizer.",
-            "Gravity keeps us grounded on the surface of the Earth.",
-            "The sun rises in the east and sets in the west.",
-        ] * 500
-        with open(corpus, "w") as f:
-            for t in texts:
-                f.write(t + "\n")
-
-    tok_path = "data/tokenizer/tokenizer.json"
-    if not os.path.exists(tok_path):
-        tok = tt([corpus], tok_path, vocab_size=16384)
-        ok(f"Vocab: {tok.get_vocab_size()}")
-    else:
-        ok("Already trained")
-
-
-# ============================================================
-# Step 4: Preprocess datasets
+# Step 3: Preprocess datasets
 # ============================================================
 
 def preprocess():
@@ -138,21 +102,94 @@ def preprocess():
 
 
 # ============================================================
-# Step 5: Preflight checks
+# Step 4: Train tokenizer on real data
+# ============================================================
+
+def train_tok():
+    sec("Tokenizer")
+    from tokenizer import train_tokenizer as tt
+
+    os.makedirs("data/tokenizer", exist_ok=True)
+    tok_path = "data/tokenizer/tokenizer.json"
+
+    if os.path.exists(tok_path):
+        from tokenizer import load_tokenizer
+        tok = load_tokenizer(tok_path)
+        v = tok.get_vocab_size()
+        if v >= 10000:
+            ok(f"Already trained (vocab: {v})")
+            return
+
+    # Extract text from preprocessed data for tokenizer training
+    corpus_path = "data/tokenizer/corpus_for_tok.txt"
+    if not os.path.exists(corpus_path):
+        info("Extracting text for tokenizer training...")
+        with open("data/processed/pretraining.jsonl") as fin, \
+             open(corpus_path, "w", encoding="utf-8") as fout:
+            count = 0
+            for line in fin:
+                item = json.loads(line)
+                text = item.get("text", "")
+                if text and len(text) > 20:
+                    fout.write(text + "\n")
+                    count += 1
+                    if count >= 50000:
+                        break
+        info(f"Wrote {count:,} lines")
+
+    tok = tt([corpus_path], tok_path, vocab_size=16384)
+    ok(f"Vocab: {tok.get_vocab_size()}")
+
+
+# ============================================================
+# Step 5: Tokenize data for training
+# ============================================================
+
+def tokenize_data():
+    sec("Tokenizing")
+    tokenized_path = "data/processed/tokenized.jsonl"
+
+    if os.path.exists(tokenized_path):
+        with open(tokenized_path) as f:
+            n = sum(1 for _ in f)
+        ok(f"Already tokenized ({n:,} docs)")
+        return
+
+    from tokenizer import load_tokenizer
+
+    tok = load_tokenizer("data/tokenizer/tokenizer.json")
+    info(f"Vocab: {tok.get_vocab_size()}")
+
+    count = 0
+    with open("data/processed/pretraining.jsonl") as fin, \
+         open(tokenized_path, "w", encoding="utf-8") as fout:
+        for line in fin:
+            item = json.loads(line)
+            text = item.get("text", "")
+            if not text or len(text) < 20:
+                continue
+            ids = tok.encode(text).ids
+            fout.write(json.dumps({"ids": ids}) + "\n")
+            count += 1
+
+    ok(f"Tokenized {count:,} documents")
+
+
+# ============================================================
+# Step 6: Preflight checks
 # ============================================================
 
 def preflight(device):
     sec("Pre-flight")
-    from config import Config, ModelConfig
+    from config import ModelConfig
     from model import NanoLLM
     from tokenizer import load_tokenizer
 
     checks = [
         ("Python", lambda: sys.version),
         ("PyTorch", lambda: torch.__version__),
-        ("CUDA", lambda: torch.cuda.is_available() or (_ for _ in ()).throw(Exception("No CUDA"))),
         ("Tokenizer", lambda: load_tokenizer("data/tokenizer/tokenizer.json")),
-        ("Dataset", lambda: os.path.exists("data/processed/pretraining.jsonl")),
+        ("Dataset", lambda: os.path.exists("data/processed/tokenized.jsonl")),
     ]
 
     for name, fn in checks:
@@ -163,7 +200,6 @@ def preflight(device):
             fail(f"{name}: {e}")
             sys.exit(1)
 
-    # Model
     try:
         config = ModelConfig()
         model = NanoLLM(config)
@@ -173,7 +209,6 @@ def preflight(device):
         fail(f"Model: {e}")
         sys.exit(1)
 
-    # Forward
     try:
         x = torch.randint(0, config.vocab_size, (2, 64))
         with torch.no_grad():
@@ -183,7 +218,6 @@ def preflight(device):
         fail(f"Forward: {e}")
         sys.exit(1)
 
-    # Backward
     try:
         _, loss = model(x, x)
         loss.backward()
@@ -196,7 +230,7 @@ def preflight(device):
 
 
 # ============================================================
-# Step 6: Train
+# Step 7: Train
 # ============================================================
 
 def train_model(device):
@@ -204,7 +238,7 @@ def train_model(device):
     from model import NanoLLM, count_parameters
     from tokenizer import load_tokenizer
     from dataset import load_jsonl, pack_documents, create_dataloaders
-    from train import save_checkpoint, load_checkpoint, get_lr, Colors
+    from train import save_checkpoint, get_lr
     from contextlib import nullcontext
 
     config = Config()
@@ -212,10 +246,9 @@ def train_model(device):
 
     hdr("NanoLLM v2 Training")
 
-    # Load tokenizer + data
     tokenizer = load_tokenizer(config.train.tokenizer_path)
-    raw = load_jsonl(os.path.join(config.train.processed_dir, "pretraining.jsonl"))
-    token_ids = [item["ids"] if "ids" in item else tokenizer.encode(item["text"]).ids for item in raw]
+    raw = load_jsonl("data/processed/tokenized.jsonl")
+    token_ids = [item["ids"] for item in raw]
     packed = pack_documents(token_ids, config.model.context_length)
     train_loader, val_loader, train_n, val_n = create_dataloaders(
         packed, config.model.context_length, config.train.batch_size
@@ -224,7 +257,6 @@ def train_model(device):
     model = NanoLLM(config.model).to(device)
     params = count_parameters(model)
     n_params = sum(v for k, v in params.items() if k != "Total")
-
     eff_bs = effective_batch_size(config)
 
     print(f"\n  {C.B}Model{C.R}")
@@ -248,7 +280,6 @@ def train_model(device):
     print(f"  Steps:        {config.train.max_steps}")
     print(f"  Warmup:       {config.train.warmup_steps}")
 
-    # Optimizer
     use_amp = config.train.use_amp and device == "cuda"
     ctx = torch.amp.autocast(device_type=device, dtype=torch.float16) if use_amp else nullcontext()
     scaler = torch.amp.GradScaler(device) if use_amp else None
@@ -266,8 +297,10 @@ def train_model(device):
     # Resume
     step = 0
     best_val_loss = float("inf")
-    if config.train.resume_from and os.path.exists(config.train.resume_from):
-        step, best_val_loss = load_checkpoint(config.train.resume_from, model, optimizer, scaler, scheduler)
+    resume_path = os.path.join(config.train.checkpoint_dir, "latest.pt")
+    if os.path.exists(resume_path):
+        from train import load_checkpoint
+        step, best_val_loss = load_checkpoint(resume_path, model, optimizer, scaler, scheduler)
         print(f"\n  Resumed from step {step}")
 
     # Sanity test
@@ -278,7 +311,6 @@ def train_model(device):
     with ctx:
         _, loss = model(x, y)
     print(f"  Input:  {list(x.shape)}")
-    print(f"  Output: {list((_, torch.tensor(0))[0].shape) if False else 'OK'}")
     print(f"  Loss:   {loss.item():.4f}")
 
     # Benchmark
@@ -404,7 +436,6 @@ def train_model(device):
 
             step += 1
 
-    # Final save
     save_checkpoint(model, optimizer, scaler, scheduler, step, best_val_loss, config,
                    os.path.join(config.train.checkpoint_dir, "latest.pt"))
     save_checkpoint(model, optimizer, scaler, scheduler, step, best_val_loss, config,
@@ -420,7 +451,7 @@ def train_model(device):
 
 
 # ============================================================
-# Step 7: Evaluate
+# Step 8: Evaluate
 # ============================================================
 
 def evaluate(device):
@@ -470,8 +501,9 @@ def main():
 
     install_deps()
     device = verify_gpu()
-    train_tok()
     preprocess()
+    train_tok()
+    tokenize_data()
     preflight(device)
     train_model(device)
     evaluate(device)

@@ -47,7 +47,7 @@ def process_fineweb_edu(num_samples: int = 200000) -> list[str]:
     """Process FineWeb-Edu dataset."""
     print("Loading FineWeb-Edu...")
     try:
-        ds = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True, trust_remote_code=True)
+        ds = load_dataset("HuggingFaceFW/fineweb-edu", name="sample-10BT", split="train", streaming=True)
         texts = []
         for i, item in enumerate(ds):
             if i >= num_samples:
@@ -66,7 +66,7 @@ def process_dailydialog() -> list[str]:
     """Process DailyDialog dataset."""
     print("Loading DailyDialog...")
     try:
-        ds = load_dataset("daily_dialog", trust_remote_code=True)
+        ds = load_dataset("daily_dialog")
         texts = []
         for split in ds:
             for item in ds[split]:
@@ -88,7 +88,7 @@ def process_squad() -> list[str]:
     """Process SQuAD dataset."""
     print("Loading SQuAD...")
     try:
-        ds = load_dataset("squad", trust_remote_code=True)
+        ds = load_dataset("squad")
         texts = []
         for split in ds:
             for item in ds[split]:
@@ -109,7 +109,7 @@ def process_openbookqa() -> list[str]:
     """Process OpenBookQA dataset."""
     print("Loading OpenBookQA...")
     try:
-        ds = load_dataset("openbookqa", trust_remote_code=True)
+        ds = load_dataset("openbookqa")
         texts = []
         for split in ds:
             for item in ds[split]:
