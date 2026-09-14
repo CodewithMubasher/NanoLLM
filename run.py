@@ -12,7 +12,7 @@ import torch
 
 
 # ============================================================
-# Colors & UI
+# UI
 # ============================================================
 
 class C:
@@ -23,7 +23,6 @@ class C:
     GRN = "\033[32m"
     YLW = "\033[33m"
     CYN = "\033[36m"
-    BLU = "\033[34m"
 
 
 def hdr(t):
@@ -93,12 +92,25 @@ def preprocess():
     if os.path.exists(processed):
         with open(processed) as f:
             n = sum(1 for _ in f)
-        ok(f"Already processed ({n:,} docs)")
-        return
+        if n > 10000:
+            ok(f"Already processed ({n:,} docs)")
+            return
 
     from preprocess import preprocess_all
     preprocess_all()
-    ok("Preprocessing complete")
+
+    # Verify
+    if not os.path.exists(processed):
+        fail("Preprocessing failed - no output file")
+        sys.exit(1)
+
+    with open(processed) as f:
+        n = sum(1 for _ in f)
+    if n < 1000:
+        fail(f"Too few documents ({n}) - check dataset download")
+        sys.exit(1)
+
+    ok(f"{n:,} documents ready")
 
 
 # ============================================================
@@ -107,38 +119,50 @@ def preprocess():
 
 def train_tok():
     sec("Tokenizer")
-    from tokenizer import train_tokenizer as tt
+    from tokenizer import train_tokenizer as tt, load_tokenizer
 
     os.makedirs("data/tokenizer", exist_ok=True)
     tok_path = "data/tokenizer/tokenizer.json"
 
+    # Check if already trained with good vocab
     if os.path.exists(tok_path):
-        from tokenizer import load_tokenizer
         tok = load_tokenizer(tok_path)
         v = tok.get_vocab_size()
         if v >= 10000:
             ok(f"Already trained (vocab: {v})")
             return
+        else:
+            info(f"Old vocab too small ({v}), retraining...")
 
-    # Extract text from preprocessed data for tokenizer training
+    # Extract text from preprocessed data
     corpus_path = "data/tokenizer/corpus_for_tok.txt"
-    if not os.path.exists(corpus_path):
-        info("Extracting text for tokenizer training...")
-        with open("data/processed/pretraining.jsonl") as fin, \
-             open(corpus_path, "w", encoding="utf-8") as fout:
-            count = 0
-            for line in fin:
-                item = json.loads(line)
-                text = item.get("text", "")
-                if text and len(text) > 20:
-                    fout.write(text + "\n")
-                    count += 1
-                    if count >= 50000:
-                        break
-        info(f"Wrote {count:,} lines")
+    info("Extracting text for tokenizer training...")
 
+    count = 0
+    with open("data/processed/pretraining.jsonl") as fin, \
+         open(corpus_path, "w", encoding="utf-8") as fout:
+        for line in fin:
+            item = json.loads(line)
+            text = item.get("text", "")
+            if text and len(text) > 50:
+                fout.write(text + "\n")
+                count += 1
+                if count >= 50000:
+                    break
+
+    info(f"Extracted {count:,} lines")
+
+    # Train
     tok = tt([corpus_path], tok_path, vocab_size=16384)
-    ok(f"Vocab: {tok.get_vocab_size()}")
+
+    # Verify
+    tok = load_tokenizer(tok_path)
+    v = tok.get_vocab_size()
+    if v < 5000:
+        fail(f"Vocab too small ({v}) - corpus may be insufficient")
+        sys.exit(1)
+
+    ok(f"Vocab: {v}")
 
 
 # ============================================================
@@ -152,27 +176,44 @@ def tokenize_data():
     if os.path.exists(tokenized_path):
         with open(tokenized_path) as f:
             n = sum(1 for _ in f)
-        ok(f"Already tokenized ({n:,} docs)")
-        return
+        if n > 10000:
+            ok(f"Already tokenized ({n:,} docs)")
+            return
 
     from tokenizer import load_tokenizer
 
     tok = load_tokenizer("data/tokenizer/tokenizer.json")
-    info(f"Vocab: {tok.get_vocab_size()}")
+    vocab_size = tok.get_vocab_size()
+    info(f"Vocab: {vocab_size}")
 
     count = 0
+    total_tokens = 0
+    rejected = 0
+
     with open("data/processed/pretraining.jsonl") as fin, \
          open(tokenized_path, "w", encoding="utf-8") as fout:
         for line in fin:
             item = json.loads(line)
             text = item.get("text", "")
+
             if not text or len(text) < 20:
+                rejected += 1
                 continue
+
             ids = tok.encode(text).ids
+
+            # Validate
+            if len(ids) < 5:
+                rejected += 1
+                continue
+
             fout.write(json.dumps({"ids": ids}) + "\n")
             count += 1
+            total_tokens += len(ids)
 
-    ok(f"Tokenized {count:,} documents")
+    info(f"Tokenized {count:,} documents ({total_tokens:,} tokens)")
+    info(f"Rejected {rejected:,} invalid documents")
+    ok(f"Average {total_tokens//max(count,1)} tokens/doc")
 
 
 # ============================================================
