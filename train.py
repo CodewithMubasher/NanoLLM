@@ -145,7 +145,7 @@ def run_preflight(config: Config):
 
     def check_gpu():
         name = torch.cuda.get_device_name(0)
-        vram = torch.cuda.get_device_properties(0).total_mem / 1e9
+        vram = torch.cuda.get_device_properties(0).total_memory / 1e9
         return f"{name} ({vram:.1f} GB)"
     check("GPU", check_gpu)
 
@@ -305,7 +305,7 @@ def train(config: Config):
 
     if device == "cuda":
         gpu_name = torch.cuda.get_device_name(0)
-        vram = torch.cuda.get_device_properties(0).total_mem / 1e9
+        vram = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"  Device:        {device}")
         print(f"  GPU:           {gpu_name}")
         print(f"  VRAM:          {vram:.1f} GB")
@@ -443,7 +443,7 @@ def train(config: Config):
                 vram_used = ""
                 if device == "cuda":
                     mem = torch.cuda.memory_allocated() / 1e9
-                    mem_total = torch.cuda.get_device_properties(0).total_mem / 1e9
+                    mem_total = torch.cuda.get_device_properties(0).total_memory / 1e9
                     vram_used = f"  VRAM {mem:.1f}/{mem_total:.1f} GB"
 
                 progress = f"Step {step}/{config.train.max_steps}"
