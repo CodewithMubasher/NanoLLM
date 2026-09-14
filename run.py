@@ -74,7 +74,7 @@ def verify_gpu():
     sec("GPU")
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
-        vram = torch.cuda.get_device_properties(0).total_mem / 1e9
+        vram = torch.cuda.get_device_properties(0).total_memory / 1e9
         ok(f"{name} ({vram:.1f} GB)")
         return "cuda"
     else:
@@ -360,7 +360,7 @@ def train_model(device):
                 vram = ""
                 if device == "cuda":
                     mem = torch.cuda.memory_allocated() / 1e9
-                    mem_t = torch.cuda.get_device_properties(0).total_mem / 1e9
+                    mem_t = torch.cuda.get_device_properties(0).total_memory / 1e9
                     vram = f"  {mem:.1f}/{mem_t:.1f}GB"
 
                 print(
